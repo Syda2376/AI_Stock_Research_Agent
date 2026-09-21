@@ -3,7 +3,6 @@ from database import get_connection
 
 app = FastAPI(title="AI Stock Research Agent")
 
-
 @app.get("/")
 def home():
     return {"message": "AI Stock Research Agent API is running!"}
@@ -99,4 +98,61 @@ def get_stock(symbol: str):
             "technical_score": row[15],
             "recommendation": row[16]
         }
+    }
+
+import joblib
+import pandas as pd
+
+@app.get("/ml-prediction/{symbol}")
+def ml_prediction(symbol: str):
+
+    model = joblib.load("../models/model.pkl")
+
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT
+            p.close,
+            p.volume,
+            t.sma_20,
+            t.sma_50,
+            t.ema_20,
+            t.rsi_14,
+            t.macd
+        FROM companies c
+        JOIN prices p ON c.id = p.company_id
+        JOIN technical_indicators t
+            ON c.id = t.company_id
+            AND p.date = t.date
+        WHERE c.symbol = %s
+        ORDER BY p.date DESC
+        LIMIT 1
+    """, (symbol.upper(),))
+
+    row = cursor.fetchone()
+
+    cursor.close()
+    connection.close()
+
+    if not row:
+        return {"error": "Stock data not found"}
+
+    features = pd.DataFrame([row], columns=[
+        "close",
+        "volume",
+        "sma_20",
+        "sma_50",
+        "ema_20",
+        "rsi_14",
+        "macd"
+    ])
+
+    probabilities = model.predict_proba(features)[0]
+
+    return {
+        "symbol": symbol.upper(),
+        "positive_probability": round(float(probabilities[1]), 4),
+        "negative_probability": round(float(probabilities[0]), 4),
+        "signal": "POSITIVE" if probabilities[1] >= 0.5 else "NEGATIVE"
     }
